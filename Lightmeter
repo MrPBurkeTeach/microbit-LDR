@@ -1,0 +1,173 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>micro:bit LDR display</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    html,body { height:100%; margin:0; font-family:Arial,Helvetica,sans-serif; }
+    body {
+      background: #0b57d0; /* blue */
+      color: yellow;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+    }
+    #value { color: yellow; font-size: 140px; font-weight:700; }
+    .controls { position: absolute; top: 16px; display:flex; gap:12px; }
+    button { padding:10px 18px; font-size:16px; border-radius:8px; cursor:pointer; }
+    #log { position: absolute; bottom: 18px; font-size:14px; color: #fff; opacity:0.9;}
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <button id="connect">🔌 Connect micro:bit</button>
+    <button id="download" disabled>⬇️ Download CSV</button>
+    <button id="clear" disabled>🗑 Clear log</button>
+  </div>
+
+  <div id="value">---</div>
+
+  <div id="log">Instructions: Click Connect → in the browser chooser select the micro:bit → then press button A on the micro:bit to send readings.</div>
+
+<script>
+<script>
+if (!('serial' in navigator)) {
+  alert('Your browser does not support Web Serial. Use Chrome or Edge (desktop).');
+}
+
+let port = null;
+let reader = null;
+let keepReading = false;
+let buffer = '';
+let readings = [];
+
+const connectBtn = document.getElementById('connect');
+const downloadBtn = document.getElementById('download');
+const clearBtn = document.getElementById('clear');
+const valueEl = document.getElementById('value');
+
+connectBtn.addEventListener('click', async () => {
+  if (port) {
+    await disconnect();
+    return;
+  }
+  try {
+    // Ask user to pick the micro:bit
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+
+    const textDecoder = new TextDecoderStream();
+    port.readable.pipeTo(textDecoder.writable);
+    const inputStream = textDecoder.readable;
+    reader = inputStream.getReader();
+    keepReading = true;
+    connectBtn.textContent = '⛔ Disconnect';
+    downloadBtn.disabled = false;
+    clearBtn.disabled = false;
+    readLoop();
+  } catch (err) {
+    alert('Could not connect: ' + err);
+    port = null;
+  }
+});
+
+async function disconnect() {
+  keepReading = false;
+  if (reader) {
+    try { await reader.cancel(); } catch(e) {}
+    reader.releaseLock();
+    reader = null;
+  }
+  if (port) {
+    try { await port.close(); } catch(e){}
+    port = null;
+  }
+  connectBtn.textContent = '🔌 Connect micro:bit';
+}
+
+// -------------------------------------------------------------
+// 🧮 CALIBRATION FUNCTION
+// -------------------------------------------------------------
+// Edit this function with your fitted equation.
+// Example shown: resistance = 45000 * (reading)^(-1.3)
+function calibrate(reading) {
+  let r = parseFloat(reading);
+  if (isNaN(r)) return NaN;
+
+  // 🧩 <<< PLACE YOUR OWN EQUATION HERE >>>
+  // Example below:
+  const resistance = 45000 * Math.pow(r, -1.3);
+
+  return resistance;
+}
+// -------------------------------------------------------------
+
+async function readLoop() {
+  buffer = '';
+  while (keepReading && reader) {
+    try {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      const parts = buffer.split(/\r?\n/);
+      buffer = parts.pop();
+
+      for (let line of parts) {
+        const v = line.trim();
+        if (!v) continue;
+
+        // Calculate calibrated value
+        const calibrated = calibrate(v);
+
+        // Display calibrated resistance (or fallback to raw)
+        if (!isNaN(calibrated)) {
+          valueEl.innerText = `${calibrated.toFixed(2)} Ω`;
+        } else {
+          valueEl.innerText = v;
+        }
+
+        // Store both raw and calibrated values
+        readings.push({
+          time: new Date().toISOString(),
+          raw: v,
+          resistance: calibrated
+        });
+      }
+    } catch (err) {
+      console.error('Read error', err);
+      alert('Read error: ' + err);
+      break;
+    }
+  }
+}
+
+downloadBtn.addEventListener('click', () => {
+  if (readings.length === 0) { alert('No readings to download'); return; }
+
+  // Include both raw and calibrated columns in the CSV
+  let csv = 'timestamp,raw_value,calibrated_resistance_ohms\r\n' + 
+    readings.map(r => `${r.time},${r.raw},${r.resistance}`).join('\r\n');
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'microbit_readings.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+clearBtn.addEventListener('click', () => {
+  readings = [];
+  valueEl.innerText = '---';
+  alert('Log cleared');
+});
+</script>
+
+</script>
+</body>
+</html>
